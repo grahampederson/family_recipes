@@ -2,8 +2,9 @@ require 'net/http'
 require 'json'
 require 'uri'
 require 'fileutils'
+require 'date'
 
-MODEL      = ENV.fetch('OLLAMA_MODEL', 'llama3.1')
+MODEL       = ENV.fetch('OLLAMA_MODEL', 'llama3.1')
 OLLAMA_HOST = ENV.fetch('OLLAMA_HOST', 'host-gateway')
 OLLAMA_PORT = ENV.fetch('OLLAMA_PORT', '11434').to_i
 
@@ -41,23 +42,71 @@ FAMILY_CONTEXT = <<~CTX
   - No pork of any kind
   - No fish or seafood
   - Onions are not a favorite (minimize or omit)
-  - Prefer chicken and beef; open to some lamb
+  - Prefer chicken and beef
   - Higher protein, lower carb meals preferred
   - Rice preferred over potatoes for starches
+  - No Cauliflower
 CTX
 
-def day_prompt(day)
+HISTORY_FILE = File.join(ENV.fetch('OUTPUT_DIR', File.join(Dir.pwd, 'recipes')), 'recipe_history.json')
+
+# ---------------------------------------------------------------------------
+# Recipe history — persists across runs so meals are never repeated
+# ---------------------------------------------------------------------------
+
+def load_history
+  return [] unless File.exist?(HISTORY_FILE)
+  JSON.parse(File.read(HISTORY_FILE))
+rescue JSON::ParserError
+  []
+end
+
+def save_history(history)
+  File.write(HISTORY_FILE, JSON.pretty_generate(history))
+end
+
+def history_context(history)
+  return '' if history.empty?
+
+  lines = history.map do |entry|
+    "  - #{entry['meal_name']} (served #{entry['date']}, #{entry['day']})"
+  end.join("\n")
+
+  <<~CTX
+    IMPORTANT — the following meals have already been served to this family.
+    Do NOT repeat or closely rehash any of these. Choose something meaningfully different:
+
+    #{lines}
+
+  CTX
+end
+
+# ---------------------------------------------------------------------------
+# Prompts
+# ---------------------------------------------------------------------------
+
+def day_prompt(day, history)
   <<~EOF
     Act as an expert family meal planner.
 
     #{FAMILY_CONTEXT}
 
+    #{history_context(history)}
     Plan dinner for #{day} only. Provide:
     1. A meal name and brief description
     2. Full ingredient list with quantities (for 5 people)
     3. Step-by-step cooking instructions
 
     Format the output cleanly in Markdown. Do not include a grocery list — just the recipe.
+  EOF
+end
+
+def meal_name_prompt(markdown_text)
+  <<~EOF
+    Extract only the meal name from the following recipe markdown. 
+    Reply with just the meal name — no explanation, no punctuation, no markdown.
+
+    #{markdown_text.lines.first(10).join}
   EOF
 end
 
@@ -91,6 +140,10 @@ def grocery_prompt(daily_ingredients)
   EOF
 end
 
+# ---------------------------------------------------------------------------
+# Ollama
+# ---------------------------------------------------------------------------
+
 def call_ollama(prompt, label)
   request = Net::HTTP::Post.new(OLLAMA_URL.path, 'Content-Type' => 'application/json')
   request.body = { model: MODEL, prompt: prompt, stream: false }.to_json
@@ -112,7 +165,6 @@ rescue => e
 end
 
 def extract_ingredients(markdown_text)
-  # Pull out the ingredients section to feed into the grocery consolidation prompt
   lines = markdown_text.lines
   in_ingredients = false
   ingredients = []
@@ -121,45 +173,65 @@ def extract_ingredients(markdown_text)
     if line.match?(/ingredient/i)
       in_ingredients = true
     elsif line.match?(/^#+\s/) && in_ingredients
-      # Stop at the next heading (e.g. Instructions)
       break if ingredients.any?
     end
-
     ingredients << line if in_ingredients
   end
 
-  # If we couldn't isolate ingredients, just send the full text — the LLM can handle it
   ingredients.any? ? ingredients.join : markdown_text
 end
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def run
   recipes_dir = ENV.fetch('OUTPUT_DIR', File.join(Dir.pwd, 'recipes'))
   FileUtils.mkdir_p(recipes_dir)
   puts "Saving files to: #{recipes_dir}\n\n"
 
+  history = load_history
+  puts "Loaded #{history.size} previous meal(s) from history — these will be avoided.\n\n" if history.any?
+
+  today       = Date.today
   daily_ingredients = []
+  week_entries      = []  # history entries generated this run
 
   DAYS.each_with_index do |day, i|
-    puts "==> Generating #{day}'s dinner..."
-    content = call_ollama(day_prompt(day), day)
+    date_label = (today + i).strftime('%Y-%m-%d')
+    puts "==> Generating #{day} (#{date_label}) dinner..."
+
+    # Pass full history including meals already generated this run
+    content = call_ollama(day_prompt(day, history + week_entries), day)
     next unless content
 
-    # Save individual day file
-    filename = File.join(recipes_dir, "#{i + 1}_#{day.downcase}.md")
-    File.write(filename, "# #{day} Dinner\n\n#{content}\n")
+    # Ask the model to pull out just the meal name for the history record
+    meal_name = call_ollama(meal_name_prompt(content), "#{day} meal name")&.strip || 'Unknown'
+    puts "  Meal: #{meal_name}"
+
+    # Save the day file
+    filename = File.join(recipes_dir, "#{date_label}_#{day.downcase}.md")
+    File.write(filename, "# #{day} Dinner — #{meal_name}\n\n#{content}\n")
     puts "  Saved: #{filename}"
 
+    entry = { 'date' => date_label, 'day' => day, 'meal_name' => meal_name }
+    week_entries << entry
     daily_ingredients << extract_ingredients(content)
     puts
   end
 
-  # Generate and save the consolidated grocery list
+  # Persist history
+  updated_history = history + week_entries
+  save_history(updated_history)
+  puts "Updated recipe_history.json (#{updated_history.size} total meals recorded).\n\n"
+
+  # Consolidated grocery list
   puts "==> Generating consolidated weekly grocery list..."
   grocery_content = call_ollama(grocery_prompt(daily_ingredients), 'grocery list')
 
   if grocery_content
-    grocery_file = File.join(recipes_dir, 'grocery_list.md')
-    File.write(grocery_file, "# Weekly Grocery List\n\n#{grocery_content}\n")
+    grocery_file = File.join(recipes_dir, "#{today.strftime('%Y-%m-%d')}_grocery_list.md")
+    File.write(grocery_file, "# Weekly Grocery List — w/c #{today.strftime('%d %b %Y')}\n\n#{grocery_content}\n")
     puts "  Saved: #{grocery_file}"
   end
 
