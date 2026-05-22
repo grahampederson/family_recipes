@@ -43,7 +43,6 @@ FAMILY_CONTEXT = <<~CTX
   - No fish or seafood
   - Onions are not a favorite (minimize or omit)
   - Prefer chicken and beef
-  - Higher protein, lower carb meals preferred
   - Rice preferred over potatoes for starches
   - No Cauliflower
 CTX
