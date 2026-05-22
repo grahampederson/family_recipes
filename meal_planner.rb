@@ -45,6 +45,17 @@ FAMILY_CONTEXT = <<~CTX
   - Prefer chicken and beef
   - Rice preferred over potatoes for starches
   - No Cauliflower
+
+  Setting & season:
+  - Midwest United States family in summer
+  - Grilling outdoors is encouraged and preferred when practical
+  - Favour seasonal summer produce: sweet corn, zucchini, tomatoes, cucumbers,
+    green beans, bell peppers, and fresh herbs
+  - Meals should be lighter and heat-friendly — avoid heavy braises or meals
+    that require long oven time on hot days
+  - Cookout and crowd-pleasing style is welcome (skewers, burgers, grilled
+    chicken) as long as it meets the dietary restrictions above
+  - Reflect the abundance and simplicity of a Midwest summer table
 CTX
 
 HISTORY_FILE = File.join(ENV.fetch('OUTPUT_DIR', File.join(Dir.pwd, 'recipes')), 'recipe_history.json')
