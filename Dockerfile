@@ -2,7 +2,7 @@ FROM ruby:3.3-slim
 
 WORKDIR /app
 
-COPY meal_planner.rb .
+COPY family_recipes.rb .
 
 # Output goes to /output — mount a host directory here to get your files
 VOLUME ["/output"]
@@ -12,4 +12,4 @@ ENV OUTPUT_DIR=/output \
     OLLAMA_PORT=11434 \
     OLLAMA_MODEL=llama3.1
 
-CMD ["ruby", "meal_planner.rb"]
+CMD ["ruby", "family_recipes.rb"]
